@@ -28,6 +28,7 @@ import {
 } from "lucide-react"
 import { getAnonymousUser, getUserLikes, syncLikesToSupabase } from "@/lib/user-storage"
 import Confetti from "canvas-confetti"
+import Image from "next/image" // Reemplazamos img por el componente de Next.js
 
 interface Post {
   id: string
@@ -52,12 +53,10 @@ interface Comment {
   parent_id?: string
 }
 
-interface Notification {
+interface UserType {
   id: string
-  type: "like" | "comment"
-  message: string
+  username: string
   created_at: string
-  read: boolean
 }
 
 const AVATAR_COLORS = [
@@ -108,10 +107,9 @@ const generateRandomAvatar = (username: string) => {
 }
 
 export default function Brutal24App() {
-  const [activeTab, setActiveTab] = useState<"feed" | "search" | "create" | "notifications" | "profile">("feed")
+  const [activeTab, setActiveTab] = useState<"feed" | "search" | "create" | "profile">("feed")
   const [posts, setPosts] = useState<Post[]>([])
   const [comments, setComments] = useState<Comment[]>([])
-  const [notifications, setNotifications] = useState<Notification[]>([])
   const [searchQuery, setSearchQuery] = useState("")
   const [newPost, setNewPost] = useState("")
   const [selectedPost, setSelectedPost] = useState<string | null>(null)
@@ -120,8 +118,7 @@ export default function Brutal24App() {
   const [loading, setLoading] = useState(false)
   const [likingPosts, setLikingPosts] = useState<Set<string>>(new Set())
   const [commentingPosts, setCommentingPosts] = useState<Set<string>>(new Set())
-  const [user, setUser] = useState<any>(null)
-  const [unreadCount, setUnreadCount] = useState(0)
+  const [user, setUser] = useState<UserType | null>(null)
   const [userLikes, setUserLikes] = useState<Set<string>>(new Set())
   const [avatarCache, setAvatarCache] = useState<Record<string, { color: string; character: string }>>({})
   const [expandedPosts, setExpandedPosts] = useState<Set<string>>(new Set())
@@ -130,11 +127,7 @@ export default function Brutal24App() {
   const supabase = createClientComponentClient()
   const { toast } = useToast()
 
-  useEffect(() => {
-    initializeApp()
-  }, [])
-
-  const initializeApp = async () => {
+  const initializeApp = useCallback(async () => {
     try {
       const anonymousUser = await getAnonymousUser()
       setUser(anonymousUser)
@@ -147,7 +140,11 @@ export default function Brutal24App() {
     } catch (error) {
       console.error("Error initializing app:", error)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    initializeApp()
+  }, [initializeApp])
 
   const setupRealtimeSubscriptions = () => {
     const postsSubscription = supabase
@@ -199,7 +196,7 @@ export default function Brutal24App() {
     }
   }
 
-  const fetchPosts = async () => {
+  const fetchPosts = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("posts")
@@ -223,7 +220,7 @@ export default function Brutal24App() {
         variant: "destructive",
       })
     }
-  }
+  }, [supabase, toast, userLikes])
 
   const fetchComments = async (postId: string) => {
     try {
@@ -272,7 +269,7 @@ export default function Brutal24App() {
         comments_count: 0,
       }
 
-      const { data, error } = await supabase.from("posts").insert(postData).select()
+      const { error } = await supabase.from("posts").insert(postData).select()
 
       if (error) {
         throw error
@@ -320,8 +317,8 @@ export default function Brutal24App() {
           newLikes.delete(postId)
           setPosts((prev) =>
             prev.map((p) =>
-              p.id === postId ? { ...p, user_has_liked: false, likes_count: Math.max(0, p.likes_count - 1) } : p,
-            ),
+              p.id === postId ? { ...p, user_has_liked: false, likes_count: Math.max(0, p.likes_count - 1) } : p
+            )
           )
 
           const { error } = await supabase
@@ -333,7 +330,7 @@ export default function Brutal24App() {
         } else {
           newLikes.add(postId)
           setPosts((prev) =>
-            prev.map((p) => (p.id === postId ? { ...p, user_has_liked: true, likes_count: p.likes_count + 1 } : p)),
+            prev.map((p) => (p.id === postId ? { ...p, user_has_liked: true, likes_count: p.likes_count + 1 } : p))
           )
 
           const { error } = await supabase
@@ -362,7 +359,7 @@ export default function Brutal24App() {
         })
       }
     },
-    [user?.id, userLikes, posts, supabase, toast, likingPosts],
+    [user?.id, userLikes, posts, supabase, toast, likingPosts, fetchPosts]
   )
 
   const addComment = async (postId: string) => {
@@ -379,7 +376,7 @@ export default function Brutal24App() {
         ...(replyingTo && { parent_id: replyingTo.id }),
       }
 
-      const { data, error } = await supabase.from("comments").insert(commentData).select().single()
+      const { error } = await supabase.from("comments").insert(commentData).select().single()
 
       if (error) throw error
 
@@ -389,7 +386,7 @@ export default function Brutal24App() {
 
       // Actualizar contador de comentarios en el post
       setPosts((prev) =>
-        prev.map((post) => (post.id === postId ? { ...post, comments_count: post.comments_count + 1 } : post)),
+        prev.map((post) => (post.id === postId ? { ...post, comments_count: post.comments_count + 1 } : post))
       )
 
       toast({
@@ -449,7 +446,7 @@ export default function Brutal24App() {
   const filteredPosts = posts.filter(
     (post) =>
       post.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      post.username.toLowerCase().includes(searchQuery.toLowerCase()),
+      post.username.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
   useEffect(() => {
@@ -605,10 +602,13 @@ export default function Brutal24App() {
                         </div>
                         {post.image_url && (
                           <div className="border-4 border-[var(--border)] shadow-[4px_4px_0px_0px_var(--border)] overflow-hidden">
-                            <img
+                            <Image
                               src={post.image_url || "/placeholder.svg"}
                               alt="Post content"
+                              width={500}
+                              height={300}
                               className="w-full h-auto"
+                              unoptimized
                             />
                           </div>
                         )}
