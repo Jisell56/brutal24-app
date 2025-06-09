@@ -25,6 +25,7 @@ import {
   Reply,
   ChevronDown,
   ChevronUp,
+  Info,
 } from "lucide-react"
 import { getAnonymousUser, getUserLikes, syncLikesToSupabase } from "@/lib/user-storage"
 import Confetti from "canvas-confetti"
@@ -122,13 +123,14 @@ export default function Brutal24App() {
   const [userLikes, setUserLikes] = useState<Set<string>>(new Set())
   const [avatarCache, setAvatarCache] = useState<Record<string, { color: string; character: string }>>({})
   const [expandedPosts, setExpandedPosts] = useState<Set<string>>(new Set())
+  const [isInitialized, setIsInitialized] = useState(false)
 
   const confettiRef = useRef<HTMLDivElement>(null)
   const supabase = createClientComponentClient()
   const { toast } = useToast()
 
-  // Corregido: Añadidas dependencias faltantes en useCallback
-  const fetchPosts = useCallback(async () => {
+  // Función para cargar posts - sin dependencias circulares
+  const loadPosts = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("posts")
@@ -138,12 +140,7 @@ export default function Brutal24App() {
 
       if (error) throw error
 
-      const postsWithLikeStatus = (data || []).map((post) => ({
-        ...post,
-        user_has_liked: userLikes.has(post.id),
-      }))
-
-      setPosts(postsWithLikeStatus)
+      return data || []
     } catch (error) {
       console.error("Error fetching posts:", error)
       toast({
@@ -151,10 +148,26 @@ export default function Brutal24App() {
         description: "No se pudieron cargar las publicaciones",
         variant: "destructive",
       })
+      return []
     }
-  }, [supabase, toast, userLikes])
+  }, [supabase, toast])
 
-  // Corregido: Añadidas dependencias faltantes en useCallback
+  // Función para actualizar posts con estado de likes
+  const updatePostsWithLikes = useCallback((postsData: Post[], likes: Set<string>) => {
+    return postsData.map((post) => ({
+      ...post,
+      user_has_liked: likes.has(post.id),
+    }))
+  }, [])
+
+  // Función para cargar posts y aplicar likes
+  const fetchPosts = useCallback(async () => {
+    const postsData = await loadPosts()
+    const postsWithLikes = updatePostsWithLikes(postsData, userLikes)
+    setPosts(postsWithLikes)
+  }, [loadPosts, updatePostsWithLikes, userLikes])
+
+  // Configurar suscripciones en tiempo real
   const setupRealtimeSubscriptions = useCallback(() => {
     const postsSubscription = supabase
       .channel("posts_changes")
@@ -189,20 +202,30 @@ export default function Brutal24App() {
     }
   }, [supabase, selectedPost])
 
+  // Inicializar app - solo una vez
   const initializeApp = useCallback(async () => {
+    if (isInitialized) return
+
     try {
+      setIsInitialized(true)
+
       const anonymousUser = await getAnonymousUser()
       setUser(anonymousUser)
 
       const likes = await getUserLikes(anonymousUser.id)
       setUserLikes(likes)
 
-      await fetchPosts()
+      // Cargar posts después de tener los likes
+      const postsData = await loadPosts()
+      const postsWithLikes = updatePostsWithLikes(postsData, likes)
+      setPosts(postsWithLikes)
+
       setupRealtimeSubscriptions()
     } catch (error) {
       console.error("Error initializing app:", error)
+      setIsInitialized(false)
     }
-  }, [fetchPosts, setupRealtimeSubscriptions]) // Corregido: Añadidas dependencias faltantes
+  }, [isInitialized, loadPosts, updatePostsWithLikes, setupRealtimeSubscriptions])
 
   useEffect(() => {
     initializeApp()
@@ -289,8 +312,9 @@ export default function Brutal24App() {
         description: "Tu publicación ha sido creada y desaparecerá en 24 horas",
       })
 
-      fetchPosts()
-    } catch (error: unknown) { // Corregido: Cambiado any por unknown
+      // Recargar posts después de crear uno nuevo
+      await fetchPosts()
+    } catch (error: unknown) {
       console.error("Error creating post:", error)
       const message = error instanceof Error ? error.message : "No se pudo crear la publicación. Inténtalo de nuevo."
       toast({
@@ -303,10 +327,12 @@ export default function Brutal24App() {
     }
   }
 
+  // Función de like optimizada para evitar bloqueos
   const toggleLike = useCallback(
     async (postId: string) => {
       if (!user?.id || likingPosts.has(postId)) return
 
+      // Prevenir múltiples clicks
       setLikingPosts((prev) => new Set(prev).add(postId))
 
       try {
@@ -315,36 +341,32 @@ export default function Brutal24App() {
 
         const hasLiked = userLikes.has(postId)
         const newLikes = new Set(userLikes)
+        let newLikesCount: number
 
         if (hasLiked) {
+          // Unlike
           newLikes.delete(postId)
-          setPosts((prev) =>
-            prev.map((p) =>
-              p.id === postId ? { ...p, user_has_liked: false, likes_count: Math.max(0, p.likes_count - 1) } : p
-            )
-          )
-
-          const { error } = await supabase
-            .from("posts")
-            .update({ likes_count: Math.max(0, post.likes_count - 1) })
-            .eq("id", postId)
-
-          if (error) throw error
+          newLikesCount = Math.max(0, post.likes_count - 1)
         } else {
+          // Like
           newLikes.add(postId)
-          setPosts((prev) =>
-            prev.map((p) => (p.id === postId ? { ...p, user_has_liked: true, likes_count: p.likes_count + 1 } : p))
-          )
-
-          const { error } = await supabase
-            .from("posts")
-            .update({ likes_count: post.likes_count + 1 })
-            .eq("id", postId)
-
-          if (error) throw error
+          newLikesCount = post.likes_count + 1
         }
 
+        // Actualización optimista de UI
+        setPosts((prev) =>
+          prev.map((p) => (p.id === postId ? { ...p, user_has_liked: !hasLiked, likes_count: newLikesCount } : p)),
+        )
+
+        // Actualizar estado local de likes inmediatamente
         setUserLikes(newLikes)
+
+        // Actualizar base de datos
+        const { error } = await supabase.from("posts").update({ likes_count: newLikesCount }).eq("id", postId)
+
+        if (error) throw error
+
+        // Sincronizar con Supabase en segundo plano
         await syncLikesToSupabase(user.id, newLikes)
       } catch (error) {
         console.error("Error toggling like:", error)
@@ -353,8 +375,11 @@ export default function Brutal24App() {
           description: "No se pudo actualizar el me gusta",
           variant: "destructive",
         })
-        fetchPosts()
+
+        // Revertir cambios en caso de error
+        await fetchPosts()
       } finally {
+        // Siempre liberar el bloqueo
         setLikingPosts((prev) => {
           const newSet = new Set(prev)
           newSet.delete(postId)
@@ -362,7 +387,7 @@ export default function Brutal24App() {
         })
       }
     },
-    [user?.id, userLikes, posts, supabase, toast, likingPosts, fetchPosts]
+    [user?.id, userLikes, posts, supabase, toast, likingPosts, fetchPosts],
   )
 
   const addComment = async (postId: string) => {
@@ -389,7 +414,7 @@ export default function Brutal24App() {
 
       // Actualizar contador de comentarios en el post
       setPosts((prev) =>
-        prev.map((post) => (post.id === postId ? { ...post, comments_count: post.comments_count + 1 } : post))
+        prev.map((post) => (post.id === postId ? { ...post, comments_count: post.comments_count + 1 } : post)),
       )
 
       toast({
@@ -449,7 +474,7 @@ export default function Brutal24App() {
   const filteredPosts = posts.filter(
     (post) =>
       post.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      post.username.toLowerCase().includes(searchQuery.toLowerCase())
+      post.username.toLowerCase().includes(searchQuery.toLowerCase()),
   )
 
   useEffect(() => {
@@ -816,6 +841,37 @@ export default function Brutal24App() {
                     </p>
                   </div>
                 </div>
+
+                {/* Explicación de cómo funciona la app */}
+                <Card className="bg-[var(--chart-5)] border-4 border-[var(--border)] shadow-[4px_4px_0px_0px_var(--border)]">
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-3">
+                      <Info className="h-5 w-5 text-[var(--foreground)] mt-0.5 flex-shrink-0" />
+                      <div className="space-y-2">
+                        <h4 className="text-base font-black text-[var(--foreground)]">¿Cómo funciona BRUTAL24?</h4>
+                        <div className="text-sm font-bold text-[var(--foreground)] opacity-80 space-y-1">
+                          <p>
+                            🎭 <strong>Totalmente anónimo:</strong> No necesitas registrarte ni dar datos personales
+                          </p>
+                          <p>
+                            ⏰ <strong>Contenido temporal:</strong> Todas las publicaciones se borran automáticamente
+                            después de 24 horas
+                          </p>
+                          <p>
+                            🎨 <strong>Diseño brutal:</strong> Una experiencia visual única con estilo neobrutalist
+                          </p>
+                          <p>
+                            💬 <strong>Interacción libre:</strong> Comenta, da likes y responde sin compromisos
+                          </p>
+                          <p>
+                            🚀 <strong>Sin algoritmos:</strong> Todo se muestra en orden cronológico, sin manipulación
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-[var(--secondary-background)] border-4 border-[var(--border)] p-3 text-center shadow-[4px_4px_0px_0px_var(--border)]">
                     <div className="text-xl font-black text-[var(--foreground)]">
