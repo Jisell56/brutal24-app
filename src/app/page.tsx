@@ -28,7 +28,7 @@ import {
 } from "lucide-react"
 import { getAnonymousUser, getUserLikes, syncLikesToSupabase } from "@/lib/user-storage"
 import Confetti from "canvas-confetti"
-import Image from "next/image" // Reemplazamos img por el componente de Next.js
+import Image from "next/image"
 
 interface Post {
   id: string
@@ -127,26 +127,35 @@ export default function Brutal24App() {
   const supabase = createClientComponentClient()
   const { toast } = useToast()
 
-  const initializeApp = useCallback(async () => {
+  // Corregido: Añadidas dependencias faltantes en useCallback
+  const fetchPosts = useCallback(async () => {
     try {
-      const anonymousUser = await getAnonymousUser()
-      setUser(anonymousUser)
+      const { data, error } = await supabase
+        .from("posts")
+        .select("*")
+        .gt("expires_at", new Date().toISOString())
+        .order("created_at", { ascending: false })
 
-      const likes = await getUserLikes(anonymousUser.id)
-      setUserLikes(likes)
+      if (error) throw error
 
-      await fetchPosts()
-      setupRealtimeSubscriptions()
+      const postsWithLikeStatus = (data || []).map((post) => ({
+        ...post,
+        user_has_liked: userLikes.has(post.id),
+      }))
+
+      setPosts(postsWithLikeStatus)
     } catch (error) {
-      console.error("Error initializing app:", error)
+      console.error("Error fetching posts:", error)
+      toast({
+        title: "Error",
+        description: "No se pudieron cargar las publicaciones",
+        variant: "destructive",
+      })
     }
-  }, [])
+  }, [supabase, toast, userLikes])
 
-  useEffect(() => {
-    initializeApp()
-  }, [initializeApp])
-
-  const setupRealtimeSubscriptions = () => {
+  // Corregido: Añadidas dependencias faltantes en useCallback
+  const setupRealtimeSubscriptions = useCallback(() => {
     const postsSubscription = supabase
       .channel("posts_changes")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "posts" }, (payload) => {
@@ -178,7 +187,26 @@ export default function Brutal24App() {
       postsSubscription.unsubscribe()
       commentsSubscription.unsubscribe()
     }
-  }
+  }, [supabase, selectedPost])
+
+  const initializeApp = useCallback(async () => {
+    try {
+      const anonymousUser = await getAnonymousUser()
+      setUser(anonymousUser)
+
+      const likes = await getUserLikes(anonymousUser.id)
+      setUserLikes(likes)
+
+      await fetchPosts()
+      setupRealtimeSubscriptions()
+    } catch (error) {
+      console.error("Error initializing app:", error)
+    }
+  }, [fetchPosts, setupRealtimeSubscriptions]) // Corregido: Añadidas dependencias faltantes
+
+  useEffect(() => {
+    initializeApp()
+  }, [initializeApp])
 
   const showNotification = (title: string, body: string) => {
     if ("Notification" in window && Notification.permission === "granted") {
@@ -195,32 +223,6 @@ export default function Brutal24App() {
       await Notification.requestPermission()
     }
   }
-
-  const fetchPosts = useCallback(async () => {
-    try {
-      const { data, error } = await supabase
-        .from("posts")
-        .select("*")
-        .gt("expires_at", new Date().toISOString())
-        .order("created_at", { ascending: false })
-
-      if (error) throw error
-
-      const postsWithLikeStatus = (data || []).map((post) => ({
-        ...post,
-        user_has_liked: userLikes.has(post.id),
-      }))
-
-      setPosts(postsWithLikeStatus)
-    } catch (error) {
-      console.error("Error fetching posts:", error)
-      toast({
-        title: "Error",
-        description: "No se pudieron cargar las publicaciones",
-        variant: "destructive",
-      })
-    }
-  }, [supabase, toast, userLikes])
 
   const fetchComments = async (postId: string) => {
     try {
@@ -288,11 +290,12 @@ export default function Brutal24App() {
       })
 
       fetchPosts()
-    } catch (error: any) {
+    } catch (error: unknown) { // Corregido: Cambiado any por unknown
       console.error("Error creating post:", error)
+      const message = error instanceof Error ? error.message : "No se pudo crear la publicación. Inténtalo de nuevo."
       toast({
         title: "Error",
-        description: error.message || "No se pudo crear la publicación. Inténtalo de nuevo.",
+        description: message,
         variant: "destructive",
       })
     } finally {
