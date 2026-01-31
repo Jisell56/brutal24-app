@@ -960,57 +960,78 @@ export default function Brutal24App() {
                       </p>
                     </div>
                   ) : (
-                    comments.map((comment) => {
-                      const avatar = getAvatar(comment.username)
-                      const isReply = !!comment.parent_id
-                      const parentComment = isReply ? comments.find((c) => c.id === comment.parent_id) : null
+                    (() => {
+                      // Separar comentarios principales y respuestas
+                      const parentComments = comments.filter((c) => !c.parent_id)
+                      const replies = comments.filter((c) => c.parent_id)
 
-                      return (
-                        <div
-                          key={comment.id}
-                          className={`flex gap-3 p-3 bg-[var(--secondary-background)] border-4 border-[var(--border)] shadow-[4px_4px_0px_0px_var(--border)] ${
-                            isReply ? "ml-6" : ""
-                          }`}
-                        >
-                          <Avatar className="border-2 border-[var(--border)] w-8 h-8">
-                            <AvatarFallback
-                              style={{ backgroundColor: avatar.color }}
-                              className="text-black font-black text-sm"
-                            >
-                              {avatar.character}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1 mb-0.5">
-                              <p className="text-[var(--foreground)] font-black text-sm truncate max-w-[80px]">
-                                @{comment.username}
-                              </p>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setReplyingTo({ id: comment.id, username: comment.username })}
-                                className="text-2xs bg-[var(--chart-3)] hover:bg-[var(--chart-3-dark)] border-2 border-[var(--border)] text-white font-bold px-1.5 py-0.5"
+                      // Función para renderizar un comentario
+                      const renderComment = (comment: Comment, isReply: boolean = false) => {
+                        const avatar = getAvatar(comment.username)
+                        const parentComment = isReply ? comments.find((c) => c.id === comment.parent_id) : null
+
+                        return (
+                          <div
+                            key={comment.id}
+                            className={`flex gap-3 p-3 bg-[var(--secondary-background)] border-4 border-[var(--border)] shadow-[4px_4px_0px_0px_var(--border)] ${
+                              isReply ? "ml-6 border-l-8 border-l-[var(--chart-3)]" : ""
+                            }`}
+                          >
+                            <Avatar className="border-2 border-[var(--border)] w-8 h-8 flex-shrink-0">
+                              <AvatarFallback
+                                style={{ backgroundColor: avatar.color }}
+                                className="text-black font-black text-sm"
                               >
-                                <Reply className="h-2.5 w-2.5 mr-0.5" />
-                                Responder
-                              </Button>
-                            </div>
-                            {isReply && parentComment && (
-                              <p className="text-2xs text-[var(--foreground)] opacity-70 mb-0.5 truncate max-w-[150px]">
-                                Respondiendo a <span className="font-bold">@{parentComment.username}</span>
+                                {avatar.character}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1 mb-0.5 flex-wrap">
+                                <p className="text-[var(--foreground)] font-black text-sm">
+                                  @{comment.username}
+                                </p>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setReplyingTo({ id: comment.id, username: comment.username })}
+                                  className="text-2xs bg-[var(--chart-3)] hover:bg-[var(--chart-3-dark)] border-2 border-[var(--border)] text-white font-bold px-1.5 py-0.5"
+                                >
+                                  <Reply className="h-2.5 w-2.5 mr-0.5" />
+                                  Responder
+                                </Button>
+                              </div>
+                              {isReply && parentComment && (
+                                <p className="text-2xs text-[var(--foreground)] opacity-70 mb-1 flex items-center gap-1">
+                                  <Reply className="h-2.5 w-2.5 rotate-180" />
+                                  Respondiendo a <span className="font-black text-[var(--chart-3)]">@{parentComment.username}</span>
+                                </p>
+                              )}
+                              <p className="text-[var(--foreground)] font-bold text-sm break-words">{comment.content}</p>
+                              <p className="text-[var(--foreground)] opacity-70 text-2xs font-bold mt-1">
+                                {new Date(comment.created_at).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
                               </p>
-                            )}
-                            <p className="text-[var(--foreground)] font-bold text-sm">{comment.content}</p>
-                            <p className="text-[var(--foreground)] opacity-70 text-2xs font-bold mt-1">
-                              {new Date(comment.created_at).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
-                            </p>
+                            </div>
                           </div>
-                        </div>
-                      )
-                    })
+                        )
+                      }
+
+                      // Renderizar comentarios principales con sus respuestas debajo
+                      return parentComments.map((parentComment) => {
+                        const commentReplies = replies
+                          .filter((r) => r.parent_id === parentComment.id)
+                          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+
+                        return (
+                          <div key={parentComment.id} className="space-y-2">
+                            {renderComment(parentComment, false)}
+                            {commentReplies.map((reply) => renderComment(reply, true))}
+                          </div>
+                        )
+                      })
+                    })()
                   )}
                 </div>
               </ScrollArea>
